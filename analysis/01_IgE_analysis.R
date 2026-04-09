@@ -17,92 +17,111 @@ rds_dir <- file.path("output", "rds")
 dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(rds_dir, recursive = TRUE, showWarnings = FALSE)
 
-# ---- 1. Load FCS data & build SCE -----------------------------------------
-fcs_path  <- file.path(data_dir, fcs_subdir)
-fileNames <- list_fcs_files(fcs_path)
-validate_fcs_files(fileNames)
+# Set to TRUE to recompute clustering & tSNE from scratch.
+# Set to FALSE (default) to load the saved checkpoint if it exists, which
+# preserves your existing tSNE orientation and cluster assignments.
+RECOMPUTE <- FALSE
 
-metadata <- build_metadata(fileNames)
-panel    <- build_panel(fileNames)
-write.csv(metadata, file.path(rds_dir, "metadata.csv"), row.names = FALSE)
-write.csv(panel,    file.path(rds_dir, "panel.csv"),    row.names = FALSE)
+checkpoint_file <- file.path(rds_dir, "sce_IgE_clean.rds")
 
-sce <- load_and_prep_sce(fileNames, panel, metadata)
-sce_IgE <- prep_ige_sce(sce)
+if (!RECOMPUTE && file.exists(checkpoint_file)) {
 
-table(colData(sce_IgE)$patient_id)
-table(colData(sce_IgE)$condition)
-table(colData(sce_IgE)$setting)
+  message("Loading cached checkpoint: ", checkpoint_file)
+  sce_IgE_clean <- readRDS(checkpoint_file)
 
-# ---- 2. QC plots (pre-clean) ----------------------------------------------
-save_figure("IgE_cell_counts_by_condition.png",
-            plot_cell_counts(sce_IgE), width = 19, height = 9)
+} else {
 
-save_figure("MDS_IgE_by_condition_setting.png",
-            pbMDS(sce_IgE, color_by = "condition", shape_by = "setting",
-                  label_by = NULL, size_by = TRUE) +
-              scale_color_manual(values = condition_colors) + theme_pub())
+  message("Computing from scratch (RECOMPUTE=TRUE or no checkpoint found)...")
 
-save_figure("MDS_IgE_by_batch.png",
-            pbMDS(sce_IgE, color_by = "batch", label_by = NULL,
-                  shape_by = "condition", size_by = TRUE) + theme_pub())
+  # ---- 1. Load FCS data & build SCE ---------------------------------------
+  fcs_path  <- file.path(data_dir, fcs_subdir)
+  fileNames <- list_fcs_files(fcs_path)
+  validate_fcs_files(fileNames)
 
-save_figure("NRS_IgE_by_condition.png",
-            plotNRS(sce_IgE, features = "state", color_by = "condition") +
-              scale_color_manual(values = condition_colors) + theme_pub(),
-            width = 12, height = 6)
+  metadata <- build_metadata(fileNames)
+  panel    <- build_panel(fileNames)
+  write.csv(metadata, file.path(rds_dir, "metadata.csv"), row.names = FALSE)
+  write.csv(panel,    file.path(rds_dir, "panel.csv"),    row.names = FALSE)
 
-# ---- 3. Remove problematic batch & repeat QC ------------------------------
-batches_keep <- c("20251117", "20251205", "20251212", "20250131", "20250206")
-sce_IgE_clean <- filterSCE(sce_IgE, batch %in% batches_keep)
+  sce <- load_and_prep_sce(fileNames, panel, metadata)
+  sce_IgE <- prep_ige_sce(sce)
 
-save_figure("IgE_clean_cell_counts.png",
-            plot_cell_counts(sce_IgE_clean), width = 19, height = 9)
+  table(colData(sce_IgE)$patient_id)
+  table(colData(sce_IgE)$condition)
+  table(colData(sce_IgE)$setting)
 
-save_figure("MDS_IgE_clean_by_condition_setting.png",
-            pbMDS(sce_IgE_clean, color_by = "condition", shape_by = "setting",
-                  label_by = NULL, size_by = TRUE) +
-              scale_color_manual(values = condition_colors) + theme_pub())
+  # ---- 2. QC plots (pre-clean) --------------------------------------------
+  save_figure("IgE_cell_counts_by_condition.png",
+              plot_cell_counts(sce_IgE), width = 19, height = 9)
 
-save_figure("MDS_IgE_clean_by_batch.png",
-            pbMDS(sce_IgE_clean, color_by = "batch", label_by = NULL,
-                  shape_by = "condition", size_by = TRUE) + theme_pub())
+  save_figure("MDS_IgE_by_condition_setting.png",
+              pbMDS(sce_IgE, color_by = "condition", shape_by = "setting",
+                    label_by = NULL, size_by = TRUE) +
+                scale_color_manual(values = condition_colors) + theme_pub())
 
-save_figure("NRS_IgE_clean_by_condition.png",
-            plotNRS(sce_IgE_clean, features = "state", color_by = "condition") +
-              scale_color_manual(values = condition_colors) + theme_pub(),
-            width = 12, height = 6)
+  save_figure("MDS_IgE_by_batch.png",
+              pbMDS(sce_IgE, color_by = "batch", label_by = NULL,
+                    shape_by = "condition", size_by = TRUE) + theme_pub())
 
-# ---- 4. Clustering --------------------------------------------------------
-# Ensure CD32B is treated as a state marker
-rowData(sce_IgE_clean)$marker_class <- as.character(rowData(sce_IgE_clean)$marker_class)
-rowData(sce_IgE_clean)$marker_class[rownames(sce_IgE_clean) == "CD32B"] <- "state"
-rowData(sce_IgE_clean)$marker_class <- factor(rowData(sce_IgE_clean)$marker_class)
+  save_figure("NRS_IgE_by_condition.png",
+              plotNRS(sce_IgE, features = "state", color_by = "condition") +
+                scale_color_manual(values = condition_colors) + theme_pub(),
+              width = 12, height = 6)
 
-sce_IgE_clean <- run_clustering(sce_IgE_clean, max_k = 16)
+  # ---- 3. Remove problematic batch & repeat QC ----------------------------
+  batches_keep <- c("20251117", "20251205", "20251212", "20250131", "20250206")
+  sce_IgE_clean <- filterSCE(sce_IgE, batch %in% batches_keep)
 
-save_figure("IgE_clean_delta_plot.png",
-            delta_area(sce_IgE_clean) + theme_pub(),
-            width = 12, height = 9)
+  save_figure("IgE_clean_cell_counts.png",
+              plot_cell_counts(sce_IgE_clean), width = 19, height = 9)
 
-# Apply merging tables (cluster_ID, Phenotype, global)
-sce_IgE_clean <- apply_merges(sce_IgE_clean)
+  save_figure("MDS_IgE_clean_by_condition_setting.png",
+              pbMDS(sce_IgE_clean, color_by = "condition", shape_by = "setting",
+                    label_by = NULL, size_by = TRUE) +
+                scale_color_manual(values = condition_colors) + theme_pub())
 
-save_figure("IgE_clean_heatmap_cluster_ID.png",
-            plotExprHeatmap(sce_IgE_clean, features = ordered_markers,
-                            k = "cluster_ID", by = "cluster_id", fun = "median",
-                            row_anno = TRUE, scale = "last", q = 0, bars = TRUE,
-                            row_clust = FALSE, col_clust = FALSE, perc = TRUE,
-                            k_pal = cluster_colors),
-            width = 12, height = 7)
+  save_figure("MDS_IgE_clean_by_batch.png",
+              pbMDS(sce_IgE_clean, color_by = "batch", label_by = NULL,
+                    shape_by = "condition", size_by = TRUE) + theme_pub())
 
-saveRDS(sce_IgE_clean, file.path(rds_dir, "sce_IgE_clean.rds"))
+  save_figure("NRS_IgE_clean_by_condition.png",
+              plotNRS(sce_IgE_clean, features = "state", color_by = "condition") +
+                scale_color_manual(values = condition_colors) + theme_pub(),
+              width = 12, height = 6)
 
-# ---- 5. Dimensionality reduction -----------------------------------------
-sce_IgE_clean <- runDR(sce_IgE_clean, cell = 1000, dr = "TSNE",
-                        features = "state", perplexity = 25, seed = 10)
-sce_IgE_clean <- runDR(sce_IgE_clean, dr = "UMAP", features = "state")
+  # ---- 4. Clustering ------------------------------------------------------
+  rowData(sce_IgE_clean)$marker_class <- as.character(rowData(sce_IgE_clean)$marker_class)
+  rowData(sce_IgE_clean)$marker_class[rownames(sce_IgE_clean) == "CD32B"] <- "state"
+  rowData(sce_IgE_clean)$marker_class <- factor(rowData(sce_IgE_clean)$marker_class)
 
+  sce_IgE_clean <- run_clustering(sce_IgE_clean, max_k = 16)
+
+  save_figure("IgE_clean_delta_plot.png",
+              delta_area(sce_IgE_clean) + theme_pub(),
+              width = 12, height = 9)
+
+  sce_IgE_clean <- apply_merges(sce_IgE_clean)
+
+  save_figure("IgE_clean_heatmap_cluster_ID.png",
+              plotExprHeatmap(sce_IgE_clean, features = ordered_markers,
+                              k = "cluster_ID", by = "cluster_id", fun = "median",
+                              row_anno = TRUE, scale = "last", q = 0, bars = TRUE,
+                              row_clust = FALSE, col_clust = FALSE, perc = TRUE,
+                              k_pal = cluster_colors),
+              width = 12, height = 7)
+
+  # ---- 5. Dimensionality reduction ---------------------------------------
+  sce_IgE_clean <- runDR(sce_IgE_clean, cell = 1000, dr = "TSNE",
+                          features = "state", perplexity = 25, seed = 10)
+  sce_IgE_clean <- runDR(sce_IgE_clean, dr = "UMAP", features = "state")
+
+  # Save checkpoint with clustering + tSNE + UMAP baked in
+  saveRDS(sce_IgE_clean, checkpoint_file)
+  message("Saved checkpoint: ", checkpoint_file)
+
+} # end if/else RECOMPUTE
+
+# ---- 5b. tSNE visualisation (uses cached embedding) ----------------------
 save_figure("tSNE_IgE_clean_all.png",
             plotDR(sce_IgE_clean, dr = "TSNE", color_by = "cluster_ID") +
               scale_color_manual(values = cluster_colors) + theme_pub())
